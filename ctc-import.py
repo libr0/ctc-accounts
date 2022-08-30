@@ -32,8 +32,10 @@ COURT_BOOKING = 'Court booking at Coburg Tennis Club'
 MEMBERSHIP_PREFIX = 'Coburg Tennis Club:'
 STRIPE_PAYOUT = 'STRIPE PAYOUT'
 REFUND_PREFIX = 'REFUND FOR CHARGE'
+APPLICATION_FEE_REFUND = 'Application fee refund'
 EVENT_PREFIX = 'Coburg Tennis Club '
 NO_NAME_ENTRY = 'NoName'
+STRIPE_FEE_TYPE = 'stripe_fee'
 
 def GetAllCustomers(book):
     """Returns all customers in book.
@@ -288,7 +290,13 @@ def ProcessStripePayments(stripe_csv, book, cs_map):
             # TODO make it deal properly with multiple bookings by a customer in a month
             allocated = False
             for player_row in player_list:
-                if player_row['Total Fee'] == amount and not player_row['Allocated']:
+                # sometimes there is an anomaly at the Total Fee is not the same as the sum of the fees...
+                court_fee = Decimal(player_row['Court Fee'])
+                light_fee = Decimal(player_row['Light Fee'])
+                total_fee = Decimal(player_row['Total Fee'])
+                dec_amount = Decimal(amount)
+                if (player_row['Total Fee'] == amount or dec_amount == (court_fee + light_fee)) and not player_row['Allocated']:
+#                if player_row['Total Fee'] == amount and not player_row['Allocated']:
                     player_row['Invoice'].ApplyPayment(trans, stripe_acct, GncNumeric(amount), \
                             GncNumeric(1), txn_date, None, None)
                     RecordStripeFee(book, trans, net, fee)
@@ -298,6 +306,7 @@ def ProcessStripePayments(stripe_csv, book, cs_map):
             if not allocated:
                 print("Unable to allocate payment to invoice :" + player_row['Total Fee'] \
                         + player_name + '\n')
+                RecordStripeFee(book, trans, net, fee)
         
         elif txn_type == 'payout':
             # process a transfer from stripe account to checking account
@@ -331,7 +340,7 @@ def ProcessStripePayments(stripe_csv, book, cs_map):
                                     cs_row["Booking Date"] + " " + cs_row["Booking Time"], \
                                     "%Y-%m-%d %H:%M:%S")
                             cs_total_fee = cs_row["Total Fee"]
-                            if cs_booking_datetime == booking_datetime and cs_total_fee == amount:
+                            if cs_booking_datetime == booking_datetime and float(cs_total_fee) == -float(amount):
                                 court_fee = cs_row['Court Fee']
                                 light_fee = cs_row['Light Fee']
 
@@ -349,13 +358,15 @@ def ProcessStripePayments(stripe_csv, book, cs_map):
                     invoice_entry = Entry(book, invoice, txn_date)
                     invoice_entry.SetDescription("Court Hire Refund")
                     invoice_entry.SetQuantity(GncNumeric(1))
+#                    invoice_entry.SetInvPrice(GncNumeric(court_fee).neg())
                     invoice_entry.SetInvPrice(GncNumeric(court_fee))
                     invoice_entry.SetInvAccount(court_hire_acct)
-                if light_fee:
+                if light_fee and abs(float(light_fee)) > 0:
                     # rest is light fee
                     lf_invoice_entry = Entry(book, invoice, txn_date)
                     lf_invoice_entry.SetDescription("Light Hire Refund")
                     lf_invoice_entry.SetQuantity(GncNumeric(1))
+#                    lf_invoice_entry.SetInvPrice(GncNumeric(light_fee).neg())
                     lf_invoice_entry.SetInvPrice(GncNumeric(light_fee))
                     lf_invoice_entry.SetInvAccount(light_hire_acct)
 
@@ -366,7 +377,7 @@ def ProcessStripePayments(stripe_csv, book, cs_map):
                 trans.BeginEdit()
                 split1 = Split(book)
                 split1.SetAccount(stripe_acct)
-                split1.SetValue(GncNumeric(amount))
+                split1.SetValue(GncNumeric(amount).neg())
                 split1.SetParent(trans)
 
                 trans.SetCurrency(AUD)
@@ -376,10 +387,11 @@ def ProcessStripePayments(stripe_csv, book, cs_map):
 
                 # now associate the payment with the correct invoice
                 # TODO make it deal properly with multiple bookings by a customer in a month
-                invoice.ApplyPayment(trans, stripe_acct, GncNumeric(amount), \
 #                invoice.ApplyPayment(None, stripe_acct, GncNumeric(amount), \
+                invoice.ApplyPayment(trans, stripe_acct, GncNumeric(amount).neg(), \
                                 GncNumeric(1), txn_date, None, None)
-                RecordStripeFee(book, trans, net, fee)
+                if fee and abs(float(fee)) > 0:
+                    RecordStripeFee(book, trans, net, fee)
             else:
                 # We don't know really who it's for, so let's just do a refund payment
                 if re.search(MEMBERSHIP_PREFIX, refund_item):
@@ -434,6 +446,29 @@ def ProcessStripePayments(stripe_csv, book, cs_map):
             customer = GetCustomer(book, customer_name, customer_email)
             event_acct = GetEventAcct(book, event_detail)
             CreateInvoiceAndPayment(book, customer, event_acct, amount, fee, net, event_detail, txn_date)
+
+        elif description.startswith(APPLICATION_FEE_REFUND) or txn_type == STRIPE_FEE_TYPE:
+            # Just add it to stripe expenses
+            stripe_fee_acct = GetStripeFeeAcct(book)
+            trans = Transaction(book)
+            trans.BeginEdit()
+            split1 = Split(book)
+            split1.SetAccount(stripe_fee_acct)
+            split1.SetValue(GncNumeric(amount).neg())
+            split1.SetParent(trans)
+            split1 = Split(book)
+            split1.SetAccount(stripe_acct)
+            split1.SetValue(GncNumeric(amount))
+            split1.SetParent(trans)
+
+            trans.SetCurrency(AUD)
+            trans.SetDate(txn_date.day, txn_date.month, txn_date.year)
+            trans.SetDescription("Fee Refund")
+            trans.CommitEdit()
+
+        else:
+            print("Unprocessed line: " + description + ": " + amount)
+
 
 
 def GetCheckingAcct(book):
@@ -523,6 +558,13 @@ def GetBookACourtCustomer(book):
     book_a_court = book.CustomerLookupByID("000001") # Book A Court
     return book_a_court
 
+def GetBacColumn(reader):
+    return reader['Booked Date']
+
+def GetStripeColumn(reader):
+    return reader['Available On (UTC)']
+
+
 if __name__ == "__main__":
     filename = 'ctctest.gnucash' if TESTING else 'ctcacounts.gnucash'
 
@@ -543,12 +585,15 @@ if __name__ == "__main__":
     # Create the invoices from the Book A Court Clubspark file
     # This allows us to split between Court Hire and Light Hire
     cs_csv = csv.DictReader(open(clubsparkfile, 'r'), skipinitialspace=True)
-    cs_map = EnterBacInvoices(cs_csv, book)
+    # sort the data
+    sorted_cs_rows = sorted(cs_csv, key=GetBacColumn)
+    cs_map = EnterBacInvoices(sorted_cs_rows, book)
 
     # Now go through the stripe payments report.  
     # This contains all payments, and includes Memberships and Events.
     stripe_csv = csv.DictReader(open(stripefile, 'r'), skipinitialspace=True)
-    ProcessStripePayments(stripe_csv, book, cs_map)
+    sorted_stripe_rows = sorted(stripe_csv, key=GetStripeColumn)
+    ProcessStripePayments(sorted_stripe_rows, book, cs_map)
 
     s.save()
     s.end()
