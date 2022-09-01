@@ -518,6 +518,8 @@ def GetMembershipAcct(book, membership_detail):
         sub_acct = membership_acct.lookup_by_name('Student')
     elif re.search('Senior', membership_detail):
         sub_acct = membership_acct.lookup_by_name('Senior')
+    elif re.search('Family', membership_detail):
+        sub_acct = membership_acct.lookup_by_name('Family')
     else: # if re.search('Adult', membership_detail):
         sub_acct = membership_acct.lookup_by_name("Individual")
 
