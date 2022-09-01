@@ -528,6 +528,7 @@ def GetEventAcct(book, event_detail):
     income = root.lookup_by_name("Income")
     event_acct = income.lookup_by_name("Events")
     fundraising_acct = income.lookup_by_name("Fundraising")
+    ball_fee_acct = income.lookup_by_name("Fees").lookup_by_name("Ball Fees")
     if re.search('OpenCourtSessions', event_detail, re.IGNORECASE):
         sub_acct = event_acct.lookup_by_name('Open Court Sessions')
     elif re.search('MensSocial', event_detail, re.IGNORECASE):
@@ -536,8 +537,12 @@ def GetEventAcct(book, event_detail):
         sub_acct = event_acct.lookup_by_name('Girl Lets Play')
     elif re.search('Club Champ', event_detail, re.IGNORECASE):
         sub_acct = event_acct.lookup_by_name('Club Championships')
+    elif re.search('Beanie', event_detail, re.IGNORECASE):
+        sub_acct = income.lookup_by_name('Apparel')
     elif re.search('Bingo', event_detail, re.IGNORECASE):
         sub_acct = fundraising_acct.lookup_by_name('Bingo')
+    elif re.search('ball fee', event_detail, re.IGNORECASE):
+        sub_acct = ball_fee_acct
     else:
         sub_acct = fundraising_acct.lookup_by_name('Club Events')
 
